@@ -48,6 +48,13 @@ describe("use client", () => {
       return context;
     }`,
         },
+        {
+          code: `const HREF = typeof window === 'undefined' ? undefined : window.location.href;`
+        },
+        {
+          code: `const HREF = typeof window !== 'undefined' ? window.location.href : '';`
+        },
+
       ],
       invalid: [
         // DOCUMENT
@@ -99,6 +106,13 @@ function Bar() {
   window.addEventListener('scroll', () => {})
   return <div />;
 }`,
+        },
+        {
+          code: `const HREF = typeof window === 'undefined' ? window.location.href : window.location.href.slice(0,10);`,
+          errors: [{ messageId: "addUseClientBrowserAPI" }],
+          output: `'use client';
+
+const HREF = typeof window === 'undefined' ? window.location.href : window.location.href.slice(0,10);`,
         },
         // OBSERVERS
         {
