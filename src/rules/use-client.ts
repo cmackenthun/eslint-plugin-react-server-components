@@ -146,10 +146,10 @@ const create = Components.detect(
     }
 
     function getBinaryBranchExecutedOnServer(node: BinaryExpression): {
-      isWindowCheck: boolean;
+      isGlobalClientPropertyCheck: boolean;
       serverBranch: Rule.Node | null;
     } {
-      const isWindowCheck =
+      const isGlobalClientPropertyCheck =
         node.left?.type === "UnaryExpression" &&
         node.left.operator === "typeof" &&
         node.left.argument?.type === "Identifier" &&
@@ -160,14 +160,14 @@ const create = Components.detect(
 
       let serverBranch = null;
 
-      if (!isWindowCheck) {
-        return { isWindowCheck, serverBranch };
+      if (!isGlobalClientPropertyCheck) {
+        return { isGlobalClientPropertyCheck, serverBranch };
       }
 
       //@ts-expect-error
       const { parent } = node;
       if (!parent) {
-        return { isWindowCheck, serverBranch };
+        return { isGlobalClientPropertyCheck, serverBranch };
       }
 
       if (node.operator === "===") {
@@ -184,7 +184,7 @@ const create = Components.detect(
             : null;
       }
 
-      return { isWindowCheck, serverBranch };
+      return { isGlobalClientPropertyCheck, serverBranch };
     }
 
     const isNodePartOfSafelyExecutedServerBranch = (
@@ -287,24 +287,24 @@ const create = Components.detect(
         const name = node.name;
         // @ts-expect-error
         if (undeclaredReferences.has(name) && browserOnlyGlobals.has(name)) {
-          // find the nearest binary expression so we can see if this instance of window is being used in a `typeof window === undefined`-like check
+          // find the nearest binary expression so we can see if this instance is being used in a `typeof window === undefined`-like check
           const binaryExpressionNode = findFirstParentOfType(
             node,
             "BinaryExpression"
           ) as BinaryExpression | null;
           if (binaryExpressionNode) {
-            const { isWindowCheck, serverBranch } =
+            const { isGlobalClientPropertyCheck, serverBranch } =
               getBinaryBranchExecutedOnServer(binaryExpressionNode);
-            // if this instance isn't part of a window check we report it
-            if (!isWindowCheck) {
+            // if this instance isn't part of a server check we report it
+            if (!isGlobalClientPropertyCheck) {
               instances.push(name);
               reportMissingDirective("addUseClientBrowserAPI", node);
-            } else if (isWindowCheck && serverBranch) {
-              // if it is part of a window check, we don't report it and we save the server branch so we can check if future window instances are a part of the branch of code safely executed on the server
+            } else if (isGlobalClientPropertyCheck && serverBranch) {
+              // if it is part of a check, we don't report it and we save the server branch so we can check if future instances are a part of the branch of code safely executed on the server
               serverBranches.add(serverBranch);
             }
           } else {
-            // if the window usage isn't part of the binary expression, we check to see if it's part of a safely checked server branch and report if not
+            // if the usage isn't part of the binary expression, we check to see if it's part of a safely checked server branch and report if not
             if (!isNodePartOfSafelyExecutedServerBranch(node)) {
               instances.push(name);
               reportMissingDirective("addUseClientBrowserAPI", node);
