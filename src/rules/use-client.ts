@@ -4,6 +4,7 @@ import type {
   ExpressionStatement,
   Identifier,
   ImportSpecifier,
+  MemberExpression,
   Node,
   Program,
   SpreadElement,
@@ -113,6 +114,38 @@ const create = Components.detect(
       });
     }
 
+    function getIsSafeWindowCheck(node: Rule.NodeParentExtension) {
+
+      // check if the window usage is behind a typeof window === 'undefined' check
+      const conditionalExpressionNode = node.parent?.parent;
+      const isWindowCheck =
+        conditionalExpressionNode?.type === "ConditionalExpression" &&
+        conditionalExpressionNode.test?.type === "BinaryExpression" &&
+        conditionalExpressionNode.test.left?.type === "UnaryExpression" &&
+        conditionalExpressionNode.test.left.operator === "typeof" &&
+        conditionalExpressionNode.test.left.argument?.type === "Identifier" &&
+        conditionalExpressionNode.test.left.argument?.name === "window" &&
+        conditionalExpressionNode.test.right?.type === "Literal" &&
+        conditionalExpressionNode.test.right.value === "undefined";
+
+      // checks to see if it's `typeof window !== 'undefined'` or `typeof window === 'undefined'`
+      const isNegatedWindowCheck =
+        isWindowCheck &&
+        conditionalExpressionNode.test?.type === "BinaryExpression" &&
+        conditionalExpressionNode.test.operator === "!==";
+
+      // checks to see if window is being accessed safely behind a window check
+      const isSafelyBehindWindowCheck =
+        (isWindowCheck &&
+          !isNegatedWindowCheck &&
+          conditionalExpressionNode.alternate === node?.parent) ||
+        (isNegatedWindowCheck &&
+          conditionalExpressionNode.consequent === node?.parent);
+
+      return isSafelyBehindWindowCheck
+
+    }
+
     const reactImports: Record<string | "namespace", string | string[]> = {
       namespace: [],
     };
@@ -209,31 +242,8 @@ const create = Components.detect(
         const name = node.object.name;
         const scopeType = context.getScope().type;
 
-        // check if the window usage is behind a typeof window === 'undefined' check
-        const conditionalExpressionNode = node.parent?.parent;
-        const isWindowCheck =
-          conditionalExpressionNode?.type === "ConditionalExpression" &&
-          conditionalExpressionNode.test?.type === "BinaryExpression" &&
-          conditionalExpressionNode.test.left?.type === "UnaryExpression" &&
-          conditionalExpressionNode.test.left.operator === "typeof" &&
-          conditionalExpressionNode.test.left.argument?.type === "Identifier" &&
-          conditionalExpressionNode.test.left.argument?.name === "window" &&
-          conditionalExpressionNode.test.right?.type === "Literal" &&
-          conditionalExpressionNode.test.right.value === "undefined";
-
-        // checks to see if it's `typeof window !== 'undefined'` or `typeof window === 'undefined'`
-        const isNegatedWindowCheck =
-          isWindowCheck &&
-          conditionalExpressionNode.test?.type === "BinaryExpression" &&
-          conditionalExpressionNode.test.operator === "!==";
-
-        // checks to see if window is being accessed safely behind a window check
-        const isSafelyBehindWindowCheck =
-          (isWindowCheck &&
-            !isNegatedWindowCheck &&
-            conditionalExpressionNode.alternate === node?.parent) ||
-          (isNegatedWindowCheck &&
-            conditionalExpressionNode.consequent === node?.parent);
+        const isSafelyBehindWindowCheck = getIsSafeWindowCheck(node);
+        
 
             if (
           undeclaredReferences.has(name) &&
@@ -241,7 +251,6 @@ const create = Components.detect(
           (scopeType === "module" || !!util.getParentComponent(node)) &&
           !isSafelyBehindWindowCheck
         ) {
-          // console.log(name, node.object)
           instances.push(name);
           reportMissingDirective("addUseClientBrowserAPI", node.object);
         }
