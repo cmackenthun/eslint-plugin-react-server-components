@@ -115,7 +115,6 @@ const create = Components.detect(
     }
 
     function getIsSafeWindowCheck(node: Rule.NodeParentExtension) {
-
       // check if the window usage is behind a typeof window === 'undefined' check
       const conditionalExpressionNode = node.parent?.parent;
       const isWindowCheck =
@@ -142,8 +141,7 @@ const create = Components.detect(
         (isNegatedWindowCheck &&
           conditionalExpressionNode.consequent === node?.parent);
 
-      return isSafelyBehindWindowCheck
-
+      return isSafelyBehindWindowCheck;
     }
 
     const reactImports: Record<string | "namespace", string | string[]> = {
@@ -243,9 +241,8 @@ const create = Components.detect(
         const scopeType = context.getScope().type;
 
         const isSafelyBehindWindowCheck = getIsSafeWindowCheck(node);
-        
 
-            if (
+        if (
           undeclaredReferences.has(name) &&
           browserOnlyGlobals.has(name) &&
           (scopeType === "module" || !!util.getParentComponent(node)) &&
