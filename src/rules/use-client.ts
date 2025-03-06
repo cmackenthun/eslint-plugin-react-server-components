@@ -1,10 +1,10 @@
 import type { Rule } from "eslint";
 import type {
+  BinaryExpression,
   Expression,
   ExpressionStatement,
   Identifier,
   ImportSpecifier,
-  MemberExpression,
   Node,
   Program,
   SpreadElement,
@@ -26,6 +26,8 @@ const browserOnlyGlobals = Object.keys(globals.browser).reduce<
   }
   return acc;
 }, new Set());
+
+const validGlobalsForServerChecks = new Set(["document", "window"]);
 
 type Options = [
   {
@@ -114,41 +116,96 @@ const create = Components.detect(
       });
     }
 
-    function getIsSafeWindowCheck(node: Rule.NodeParentExtension) {
-      // check if the window usage is behind a typeof window === 'undefined' check
-      const conditionalExpressionNode = node.parent?.parent;
-      const isWindowCheck =
-        conditionalExpressionNode?.type === "ConditionalExpression" &&
-        conditionalExpressionNode.test?.type === "BinaryExpression" &&
-        conditionalExpressionNode.test.left?.type === "UnaryExpression" &&
-        conditionalExpressionNode.test.left.operator === "typeof" &&
-        conditionalExpressionNode.test.left.argument?.type === "Identifier" &&
-        conditionalExpressionNode.test.left.argument?.name === "window" &&
-        conditionalExpressionNode.test.right?.type === "Literal" &&
-        conditionalExpressionNode.test.right.value === "undefined";
+    function findFirstParentOfType(
+      node: Rule.Node,
+      type: string
+    ): Rule.Node | null {
+      let currentNode: Rule.Node | null = node;
 
-      // checks to see if it's `typeof window !== 'undefined'` or `typeof window === 'undefined'`
-      const isNegatedWindowCheck =
-        isWindowCheck &&
-        conditionalExpressionNode.test?.type === "BinaryExpression" &&
-        conditionalExpressionNode.test.operator === "!==";
+      while (currentNode) {
+        if (currentNode.type === type) {
+          return currentNode;
+        }
+        currentNode = currentNode?.parent;
+      }
 
-      // checks to see if window is being accessed safely behind a window check
-      const isSafelyBehindWindowCheck =
-        (isWindowCheck &&
-          !isNegatedWindowCheck &&
-          conditionalExpressionNode.alternate === node?.parent) ||
-        (isNegatedWindowCheck &&
-          conditionalExpressionNode.consequent === node?.parent);
-
-      return isSafelyBehindWindowCheck;
+      return null;
     }
+
+    function isNodeInTree(node: Rule.Node, target: Rule.Node): boolean {
+      let currentNode: Rule.Node | null = node;
+
+      while (currentNode) {
+        if (currentNode === target) {
+          return true;
+        }
+        currentNode = currentNode.parent;
+      }
+
+      return false;
+    }
+
+    function getBinaryBranchExecutedOnServer(node: BinaryExpression): {
+      isWindowCheck: boolean;
+      serverBranch: Rule.Node | null;
+    } {
+      const isWindowCheck =
+        node.left?.type === "UnaryExpression" &&
+        node.left.operator === "typeof" &&
+        node.left.argument?.type === "Identifier" &&
+        validGlobalsForServerChecks.has(node.left.argument?.name) &&
+        node.right?.type === "Literal" &&
+        node.right.value === "undefined" &&
+        (node.operator === "===" || node.operator === "!==");
+
+      let serverBranch = null;
+
+      if (!isWindowCheck) {
+        return { isWindowCheck, serverBranch };
+      }
+
+      //@ts-expect-error
+      const { parent } = node;
+      if (!parent) {
+        return { isWindowCheck, serverBranch };
+      }
+
+      if (node.operator === "===") {
+        serverBranch =
+          parent.type === "IfStatement" ||
+          parent.type === "ConditionalExpression"
+            ? parent.alternate
+            : null;
+      } else {
+        serverBranch =
+          parent.type === "IfStatement" ||
+          parent.type === "ConditionalExpression"
+            ? parent.consequent
+            : null;
+      }
+
+      return { isWindowCheck, serverBranch };
+    }
+
+    const isNodePartOfSafelyExecutedServerBranch = (
+      node: Rule.Node
+    ): boolean => {
+      let isUsedInServerBranch = false;
+      serverBranches.forEach((serverBranch) => {
+        if (isNodeInTree(node, serverBranch)) {
+          isUsedInServerBranch = true;
+        }
+      });
+      return isUsedInServerBranch;
+    };
 
     const reactImports: Record<string | "namespace", string | string[]> = {
       namespace: [],
     };
 
     const undeclaredReferences = new Set();
+
+    const serverBranches = new Set<Rule.Node>();
 
     return {
       Program(node) {
@@ -226,30 +283,33 @@ const create = Components.detect(
           });
         }
       },
-      MemberExpression(node) {
-        // Catch uses of browser APIs in module scope
-        // or React component scope.
-        // eg:
-        // const foo = window.foo
-        // window.addEventListener(() => {})
-        // const Foo() {
-        //   const foo = window.foo
-        //   return <div />;
-        // }
+      Identifier(node) {
+        const name = node.name;
         // @ts-expect-error
-        const name = node.object.name;
-        const scopeType = context.getScope().type;
-
-        const isSafelyBehindWindowCheck = getIsSafeWindowCheck(node);
-
-        if (
-          undeclaredReferences.has(name) &&
-          browserOnlyGlobals.has(name) &&
-          (scopeType === "module" || !!util.getParentComponent(node)) &&
-          !isSafelyBehindWindowCheck
-        ) {
-          instances.push(name);
-          reportMissingDirective("addUseClientBrowserAPI", node.object);
+        if (undeclaredReferences.has(name) && browserOnlyGlobals.has(name)) {
+          // find the nearest binary expression so we can see if this instance of window is being used in a `typeof window === undefined`-like check
+          const binaryExpressionNode = findFirstParentOfType(
+            node,
+            "BinaryExpression"
+          ) as BinaryExpression | null;
+          if (binaryExpressionNode) {
+            const { isWindowCheck, serverBranch } =
+              getBinaryBranchExecutedOnServer(binaryExpressionNode);
+            // if this instance isn't part of a window check we report it
+            if (!isWindowCheck) {
+              instances.push(name);
+              reportMissingDirective("addUseClientBrowserAPI", node);
+            } else if (isWindowCheck && serverBranch) {
+              // if it is part of a window check, we don't report it and we save the server branch so we can check if future window instances are a part of the branch of code safely executed on the server
+              serverBranches.add(serverBranch);
+            }
+          } else {
+            // if the window usage isn't part of the binary expression, we check to see if it's part of a safely checked server branch and report if not
+            if (!isNodePartOfSafelyExecutedServerBranch(node)) {
+              instances.push(name);
+              reportMissingDirective("addUseClientBrowserAPI", node);
+            }
+          }
         }
       },
       ExpressionStatement(node) {
