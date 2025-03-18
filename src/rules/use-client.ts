@@ -27,8 +27,6 @@ const browserOnlyGlobals = Object.keys(globals.browser).reduce<
   return acc;
 }, new Set());
 
-const validGlobalsForServerChecks = new Set(["document", "window"]);
-
 type Options = [
   {
     allowedServerHooks?: string[];
@@ -116,34 +114,6 @@ const create = Components.detect(
       });
     }
 
-    function findFirstParentOfType(
-      node: Rule.Node,
-      type: string
-    ): Rule.Node | null {
-      let currentNode: Rule.Node | null = node;
-
-      while (currentNode) {
-        if (currentNode.type === type) {
-          return currentNode;
-        }
-        currentNode = currentNode?.parent;
-      }
-
-      return null;
-    }
-
-    function isNodeInTree(node: Rule.Node, target: Rule.Node): boolean {
-      let currentNode: Rule.Node | null = node;
-
-      while (currentNode) {
-        if (currentNode === target) {
-          return true;
-        }
-        currentNode = currentNode.parent;
-      }
-
-      return false;
-    }
 
     function getBinaryBranchExecutedOnServer(node: BinaryExpression): {
       isGlobalClientPropertyCheck: boolean;
@@ -153,7 +123,7 @@ const create = Components.detect(
         node.left?.type === "UnaryExpression" &&
         node.left.operator === "typeof" &&
         node.left.argument?.type === "Identifier" &&
-        validGlobalsForServerChecks.has(node.left.argument?.name) &&
+        browserOnlyGlobals.has(node.left.argument?.name as any) &&
         node.right?.type === "Literal" &&
         node.right.value === "undefined" &&
         (node.operator === "===" || node.operator === "!==");
@@ -408,6 +378,35 @@ function isFunction(def: any) {
   if (def.node.init && def.node.init.type === "ArrowFunctionExpression") {
     return true;
   }
+  return false;
+}
+
+function findFirstParentOfType(
+  node: Rule.Node,
+  type: string
+): Rule.Node | null {
+  let currentNode: Rule.Node | null = node;
+
+  while (currentNode) {
+    if (currentNode.type === type) {
+      return currentNode;
+    }
+    currentNode = currentNode?.parent;
+  }
+
+  return null;
+}
+
+function isNodeInTree(node: Rule.Node, target: Rule.Node): boolean {
+  let currentNode: Rule.Node | null = node;
+
+  while (currentNode) {
+    if (currentNode === target) {
+      return true;
+    }
+    currentNode = currentNode.parent;
+  }
+
   return false;
 }
 
